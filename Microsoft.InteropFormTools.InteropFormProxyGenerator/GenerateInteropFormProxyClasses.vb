@@ -1,8 +1,6 @@
 ﻿Imports System
 Imports System.ComponentModel.Design
-Imports System.Globalization
 Imports Microsoft.VisualStudio.Shell
-Imports Microsoft.VisualStudio.Shell.Interop
 Imports System.Windows.Forms
 Imports EnvDTE
 Imports EnvDTE80
@@ -11,6 +9,7 @@ Imports System.IO
 Imports System.CodeDom
 Imports System.CodeDom.Compiler
 Imports Microsoft.VisualBasic
+Imports System.Text
 
 ''' <summary>
 ''' Command handler
@@ -39,11 +38,11 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
     ''' <param name="package">Owner package, not null.</param>
     Private Sub New(package As Package)
         If package Is Nothing Then
-            Throw New ArgumentNullException("package")
+            Throw New ArgumentNullException(NameOf(package))
         End If
 
         Me.package = package
-        Dim commandService As OleMenuCommandService = Me.ServiceProvider.GetService(GetType(IMenuCommandService))
+        Dim commandService As OleMenuCommandService = CType(ServiceProvider.GetService(GetType(IMenuCommandService)), OleMenuCommandService)
         If commandService IsNot Nothing Then
             Dim menuCommandId = New CommandID(CommandSet, CommandId)
             ' Using a an OLE command so we can dynamically set the text to a localized value.
@@ -52,7 +51,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         End If
 
         Try
-            _applicationObject = Package.GetGlobalService(GetType(DTE))
+            _applicationObject = CType(Package.GetGlobalService(GetType(DTE)), DTE2)
             LoadSupportedTypes()
         Catch
             DisplayError(My.Resources.LoadSupportedTypesErrMsg)
@@ -97,34 +96,35 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
 #End Region
 
 #Region " Private Constants "
-    Private DISPLAY_CAPTION As String = My.Resources.DISPLAY_CAPTION
-    Private DOCUMENT_TYPE As String = My.Resources.DOCUMENT_TYPE
-    Private FOLDER_TYPE As String = My.Resources.FOLDER_TYPE
-    Private INTEROP_FORM_PROXY_FOLDER_NAME As String = My.Resources.INTEROP_FORM_PROXY_FOLDER_NAME
+    Private ReadOnly DISPLAY_CAPTION As String = My.Resources.DISPLAY_CAPTION
+    Private ReadOnly DOCUMENT_TYPE As String = My.Resources.DOCUMENT_TYPE
+    Private ReadOnly FOLDER_TYPE As String = My.Resources.FOLDER_TYPE
+    Private ReadOnly INTEROP_FORM_PROXY_FOLDER_NAME As String = My.Resources.INTEROP_FORM_PROXY_FOLDER_NAME
 
-    Private EVENT_ARGS_COMMENT As String = String.Format("{0}{1}{2}{3}{4}", My.Resources.EVENT_ARGS_COMMENT1, vbNewLine, My.Resources.EVENT_ARGS_COMMENT2, vbNewLine, My.Resources.EVENT_ARGS_COMMENT3)
+    Private ReadOnly EVENT_ARGS_COMMENT As String = String.Format("{0}{1}{2}{3}{4}", My.Resources.EVENT_ARGS_COMMENT1, vbNewLine, My.Resources.EVENT_ARGS_COMMENT2, vbNewLine, My.Resources.EVENT_ARGS_COMMENT3)
 #End Region
 
 #Region " Private Variables "
-    Dim _applicationObject As DTE2
+    Private ReadOnly _applicationObject As DTE2
 
-    Dim _attrTypeForm As Type = GetType(InteropFormAttribute)
-    Dim _attrTypeInitializer As Type = GetType(InteropFormInitializerAttribute)
-    Dim _attrTypeMethod As Type = GetType(InteropFormMethodAttribute)
-    Dim _attrTypeProperty As Type = GetType(InteropFormPropertyAttribute)
-    Dim _attrTypeEvent As Type = GetType(InteropFormEventAttribute)
+    Private ReadOnly _attrTypeForm As Type = GetType(InteropFormAttribute)
+    Private ReadOnly _attrTypeInitializer As Type = GetType(InteropFormInitializerAttribute)
+    Private ReadOnly _attrTypeMethod As Type = GetType(InteropFormMethodAttribute)
+    Private ReadOnly _attrTypeProperty As Type = GetType(InteropFormPropertyAttribute)
+    Private ReadOnly _attrTypeEvent As Type = GetType(InteropFormEventAttribute)
 
-    Dim _supportedTypes As List(Of Type) = Nothing
+    Private _supportedTypes As List(Of Type) = Nothing
 #End Region
 
 #Region " Private Methods "
     Private Sub LoadSupportedTypes()
         ' Load list of types that are allowed to be used in members.
-        _supportedTypes = New List(Of Type)
-        _supportedTypes.Add(GetType(Int32))
-        _supportedTypes.Add(GetType(String))
-        _supportedTypes.Add(GetType(Boolean))
-        _supportedTypes.Add(GetType(Object))
+        _supportedTypes = New List(Of Type) From {
+            GetType(Int32),
+            GetType(String),
+            GetType(Boolean),
+            GetType(Object)
+        }
     End Sub
 
     Private m_blnProxiesGenerated As Boolean
@@ -173,48 +173,25 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         End If
 
         Dim interopFormFileInfo As New FileInfo(interopFormDoc.FileNames(0))
-        Dim proxyFolderInfo As New DirectoryInfo(interopFormFileInfo.DirectoryName & "\" & INTEROP_FORM_PROXY_FOLDER_NAME)
+        Dim proxyFolderInfo As New DirectoryInfo(Path.Combine(interopFormFileInfo.DirectoryName, INTEROP_FORM_PROXY_FOLDER_NAME))
 
         ' check if folder is already part of the project
-        Dim proxyfolderItem As ProjectItem = Nothing
-        For Each level1Item As ProjectItem In currentAssembly.ProjectItems
-            If level1Item.Kind = FOLDER_TYPE AndAlso level1Item.Name = INTEROP_FORM_PROXY_FOLDER_NAME Then
-                proxyfolderItem = level1Item
-                Exit For
-            End If
-        Next
+        Dim proxyfolderItem As ProjectItem = GetExistingProxyFolderItem(currentAssembly)
 
         ' create folder if it doesn't already exist
         If proxyfolderItem Is Nothing Then
             If Not proxyFolderInfo.Exists Then
-                'proxyFolderInfo.Create()
                 proxyfolderItem = currentAssembly.ProjectItems.AddFolder(proxyFolderInfo.Name)
             Else
-                ' todo: better way to add the existing folder instead of deleting first
-                ' todo: fix this because it doesn't always work - item is out of synch?
-                proxyFolderInfo.Delete(True)
-                'proxyFolderInfo.Refresh()
-                'proxyFolderInfo.Create()
-                'proxyFolderInfo.Refresh()
-                proxyfolderItem = currentAssembly.ProjectItems.AddFolder(proxyFolderInfo.Name)
+                proxyfolderItem = currentAssembly.ProjectItems.AddFromDirectory(proxyFolderInfo.Name)
             End If
         End If
 
         ' create proxy file info
-        Dim proxyFilePath As String = proxyFolderInfo.FullName & "\" & interopFormFileInfo.Name.Replace(interopFormFileInfo.Extension, ".wrapper" & interopFormFileInfo.Extension)
+        Dim proxyFilePath As String = Path.Combine(proxyFolderInfo.FullName, interopFormFileInfo.Name.Replace(interopFormFileInfo.Extension, ".wrapper" & interopFormFileInfo.Extension))
         Dim proxyFileInfo As New FileInfo(proxyFilePath)
-        Dim proxyFileItem As ProjectItem
-        For Each doc As ProjectItem In proxyfolderItem.ProjectItems
-            If doc.Kind = DOCUMENT_TYPE AndAlso doc.Name = proxyFileInfo.Name Then
-                proxyFileItem = doc
-                If currentAssembly.DTE.SourceControl.IsItemUnderSCC(proxyFilePath) Then
-                    If Not doc.Collection.ContainingProject.DTE.SourceControl.IsItemCheckedOut(proxyFilePath) Then
-                        doc.Collection.ContainingProject.DTE.SourceControl.CheckOutItem(proxyFilePath)
-                    End If
-                End If
-                Exit For
-            End If
-        Next
+
+        CheckOutFromSourceControl(currentAssembly, proxyfolderItem, proxyFilePath, proxyFileInfo)
 
         ' wipe out the old file if it exists
         If proxyFileInfo.Exists Then
@@ -223,7 +200,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
 
         Dim code As New CodeCompileUnit()
         ' Import the InteropTools namespace
-        Dim nsImport As New CodeDom.CodeNamespaceImport(_attrTypeForm.Namespace)
+        Dim nsImport As New CodeNamespaceImport(_attrTypeForm.Namespace)
 
         ' Build within that a new sub namespace called Interop
         ' So if the Form class is MyCompany.HelloWorld
@@ -231,8 +208,10 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         ' Since the former is not exposed to COM, VB6
         ' code doesn't need to qualify the namespace so
         ' the name will look the same.
-        Dim ns As New CodeDom.CodeNamespace
-        ns.Name = "Interop"
+        Dim ns As New CodeDom.CodeNamespace With {
+            .Name = "Interop"
+        }
+
         code.Namespaces.Add(ns)
         ns.Imports.Add(nsImport)
 
@@ -248,18 +227,18 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
             proxyClass.IsPartial = True
             Dim trueEx As New CodePrimitiveExpression(True)
             Dim aDual As New CodeSnippetExpression("Runtime.InteropServices.ClassInterfaceType.AutoDual")
-            proxyClass.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ClassInterface", New CodeDom.CodeAttributeArgument() {New CodeDom.CodeAttributeArgument(aDual)}))
+            proxyClass.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ClassInterface", {New CodeDom.CodeAttributeArgument(aDual)}))
             ' todo: is autodual right way?  Or should an explicit interface be generated?
-            proxyClass.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ComVisible", New CodeDom.CodeAttributeArgument() {New CodeDom.CodeAttributeArgument(trueEx)}))
+            proxyClass.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ComVisible", {New CodeDom.CodeAttributeArgument(trueEx)}))
             proxyClass.BaseTypes.Add(New CodeTypeReference(GetType(InteropFormProxyBase).Name))
 
             ' create the event sink interface. wait to add it to the namespace only if events exist
             Dim proxyClassEventSinkInterface As New CodeTypeDeclaration("I" & proxyClass.Name & "EventSink")
-            proxyClassEventSinkInterface.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.InterfaceTypeAttribute", New CodeDom.CodeAttributeArgument() {New CodeDom.CodeAttributeArgument(New CodeSnippetExpression("System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIDispatch"))}))
-            proxyClassEventSinkInterface.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ComVisible", New CodeDom.CodeAttributeArgument() {New CodeDom.CodeAttributeArgument(trueEx)}))
+            proxyClassEventSinkInterface.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.InterfaceTypeAttribute", {New CodeDom.CodeAttributeArgument(New CodeSnippetExpression("System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIDispatch"))}))
+            proxyClassEventSinkInterface.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ComVisible", {New CodeDom.CodeAttributeArgument(trueEx)}))
             proxyClassEventSinkInterface.IsInterface = True
 
-            Dim defaultCtor As New CodeDom.CodeConstructor()
+            Dim defaultCtor As New CodeConstructor()
             Dim ctorLine1 As New CodeSnippetStatement("            FormInstance = New " & interopFormClassName & "()")
             Dim ctorLine2 As New CodeSnippetStatement("            RegisterFormInstance()")
 
@@ -268,73 +247,23 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
             defaultCtor.Attributes = MemberAttributes.Public
             proxyClass.Members.Add(defaultCtor)
 
-            ' check the members of the interop form class for attributes
-            ' and generate members in the proxy accordingly
             If interopFormClass.Members.Count > 0 Then
-                For Each member As CodeElement In interopFormClass.Members
-                    ' check for constructors to make Initialize methods for
-                    If member.Kind = vsCMElement.vsCMElementFunction Then
-                        ' cast as function object
-                        Dim method As CodeFunction2 = CType(member, CodeFunction2)
-                        If method.Access = vsCMAccess.vsCMAccessPublic Then
-                            For Each custAtt As CodeElement In method.Attributes
-                                If AttributesMatch(custAtt, _attrTypeInitializer) Then
-                                    ' this method is a constructor and
-                                    ' has been decorated to indicate it should
-                                    ' be exposed via the proxy class
-                                    AddInitializeMethodForConstructor(proxyClass, interopFormClass, method)
-                                    Exit For
-                                ElseIf AttributesMatch(custAtt, _attrTypeMethod) Then
-                                    ' this method is a non-constructor method and
-                                    ' has been decorated to indicate it should
-                                    ' be exposed via the proxy class
-                                    AddMethod(proxyClass, interopFormClass, method)
-                                    Exit For
-                                End If
-                            Next
-                        End If
-                    ElseIf member.Kind = vsCMElement.vsCMElementProperty Then
-                        ' cast as property object
-                        Dim prop As CodeProperty2 = CType(member, CodeProperty2)
-                        If prop.Access = vsCMAccess.vsCMAccessPublic Then
-
-                            For Each custAtt As CodeElement In prop.Attributes
-                                If AttributesMatch(custAtt, _attrTypeProperty) Then
-                                    ' this method is a property and
-                                    ' has been decorated to indicate it should
-                                    ' be exposed via the proxy class
-                                    AddProperty(proxyClass, interopFormClass, prop)
-                                    Exit For
-                                End If
-                            Next
-                        End If
-                    ElseIf member.Kind = vsCMElement.vsCMElementEvent Then
-                        Dim evt As CodeEvent = CType(member, CodeEvent)
-                        If evt.Access = vsCMAccess.vsCMAccessPublic Then
-                            For Each custAtt As CodeElement In evt.Attributes
-                                If AttributesMatch(custAtt, _attrTypeEvent) Then
-                                    ' this method is a property and
-                                    ' has been decorated to indicate it should
-                                    ' be exposed via the proxy class
-                                    AddEvent(currentAssembly, proxyClass, interopFormClass, evt, proxyClassEventSinkInterface)
-                                    Exit For
-                                End If
-                            Next
-                        End If
-                    End If
-                Next
+                ' check the members of the interop form class for attributes
+                ' and generate members in the proxy accordingly
+                GenerateProxyMembers(currentAssembly, interopFormClass, proxyClass, proxyClassEventSinkInterface)
             End If
 
             ' only add the event sink if the interface was built out (i.e. the class has events)
             If proxyClassEventSinkInterface.Members.Count > 0 Then
                 ns.Types.Add(proxyClassEventSinkInterface)
-                proxyClass.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ComSourceInterfaces", New CodeDom.CodeAttributeArgument() {New CodeDom.CodeAttributeArgument(New CodeDom.CodeTypeOfExpression(proxyClassEventSinkInterface.Name))}))
+                proxyClass.CustomAttributes.Add(New CodeAttributeDeclaration("System.Runtime.InteropServices.ComSourceInterfaces", {New CodeDom.CodeAttributeArgument(New CodeTypeOfExpression(proxyClassEventSinkInterface.Name))}))
             End If
 
         Next
 
-        Dim fsw As New System.IO.StreamWriter(proxyFileInfo.Create())
-        fsw.AutoFlush = True
+        Dim fsw As New StreamWriter(proxyFileInfo.Create()) With {
+            .AutoFlush = True
+        }
 
         Dim vb As New VBCodeProvider()
 
@@ -356,6 +285,83 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         m_blnProxiesGenerated = True
     End Sub
 
+    Private Sub CheckOutFromSourceControl(currentAssembly As Project, proxyfolderItem As ProjectItem, proxyFilePath As String, proxyFileInfo As FileInfo)
+        For Each doc As ProjectItem In proxyfolderItem.ProjectItems
+            If doc.Kind = DOCUMENT_TYPE AndAlso doc.Name = proxyFileInfo.Name Then
+                If currentAssembly.DTE.SourceControl.IsItemUnderSCC(proxyFilePath) AndAlso Not doc.Collection.ContainingProject.DTE.SourceControl.IsItemCheckedOut(proxyFilePath) Then
+                    doc.Collection.ContainingProject.DTE.SourceControl.CheckOutItem(proxyFilePath)
+                End If
+
+                Return
+            End If
+        Next
+    End Sub
+
+    Private Sub GenerateProxyMembers(currentAssembly As Project, interopFormClass As CodeClass, proxyClass As CodeTypeDeclaration, proxyClassEventSinkInterface As CodeTypeDeclaration)
+        For Each member As CodeElement In interopFormClass.Members
+            ' check for constructors to make Initialize methods for
+            Select Case member.Kind
+                Case vsCMElement.vsCMElementFunction
+                    ' cast as function object
+                    Dim method As CodeFunction2 = CType(member, CodeFunction2)
+                    If method.Access = vsCMAccess.vsCMAccessPublic Then
+                        For Each custAtt As CodeElement In method.Attributes
+                            If AttributesMatch(custAtt, _attrTypeInitializer) Then
+                                ' this method is a constructor and
+                                ' has been decorated to indicate it should
+                                ' be exposed via the proxy class
+                                AddInitializeMethodForConstructor(proxyClass, interopFormClass, method)
+                                Exit For
+                            ElseIf AttributesMatch(custAtt, _attrTypeMethod) Then
+                                ' this method is a non-constructor method and
+                                ' has been decorated to indicate it should
+                                ' be exposed via the proxy class
+                                AddMethod(proxyClass, interopFormClass, method)
+                                Exit For
+                            End If
+                        Next
+                    End If
+                Case vsCMElement.vsCMElementProperty
+                    ' cast as property object
+                    Dim prop As CodeProperty2 = CType(member, CodeProperty2)
+                    If prop.Access = vsCMAccess.vsCMAccessPublic Then
+                        For Each custAtt As CodeElement In prop.Attributes
+                            If AttributesMatch(custAtt, _attrTypeProperty) Then
+                                ' this method is a property and
+                                ' has been decorated to indicate it should
+                                ' be exposed via the proxy class
+                                AddProperty(proxyClass, interopFormClass, prop)
+                                Exit For
+                            End If
+                        Next
+                    End If
+                Case vsCMElement.vsCMElementEvent
+                    Dim evt As CodeEvent = CType(member, CodeEvent)
+                    If evt.Access = vsCMAccess.vsCMAccessPublic Then
+                        For Each custAtt As CodeElement In evt.Attributes
+                            If AttributesMatch(custAtt, _attrTypeEvent) Then
+                                ' this method is a property and
+                                ' has been decorated to indicate it should
+                                ' be exposed via the proxy class
+                                AddEvent(currentAssembly, proxyClass, interopFormClass, evt, proxyClassEventSinkInterface)
+                                Exit For
+                            End If
+                        Next
+                    End If
+            End Select
+        Next
+    End Sub
+
+    Private Function GetExistingProxyFolderItem(currentAssembly As Project) As ProjectItem
+        For Each level1Item As ProjectItem In currentAssembly.ProjectItems
+            If level1Item.Kind = FOLDER_TYPE AndAlso level1Item.Name = INTEROP_FORM_PROXY_FOLDER_NAME Then
+                Return level1Item
+            End If
+        Next
+
+        Return Nothing
+    End Function
+
     Private Function GetInteropFormClasses(ByVal assemblyProj As Project, ByVal projItem As ProjectItem) As List(Of CodeClass)
         ' Create list to hold the interopForm classes we find
         Dim interopFormClasses As New List(Of CodeClass)
@@ -370,7 +376,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
     Private Sub FindInteropFormClasses(ByVal currentAssembly As Project, ByVal codeElements As CodeElements, ByVal interopFormClasses As List(Of CodeClass))
         ' safety check
         If codeElements Is Nothing Then
-            Exit Sub
+            Return
         End If
 
         ' todo: faster/cleaner way to find?
@@ -380,6 +386,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
                 Dim interopFormClass As CodeClass = CType(codeElements.Parent, CodeClass)
                 interopFormClasses.Add(interopFormClass)
             End If
+
             If ce.Children.Count > 0 Then
                 FindInteropFormClasses(currentAssembly, ce.Children, interopFormClasses)
             End If
@@ -387,30 +394,37 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
     End Sub
 
     Private Sub AddInitializeMethodForConstructor(ByVal proxyClass As CodeTypeDeclaration, ByVal interopFormClass As CodeClass, ByVal method As CodeFunction)
-        Dim initMethod As New CodeMemberMethod()
-        initMethod.Name = "Initialize"
-        initMethod.Attributes = MemberAttributes.Public
+        Dim initMethod As New CodeMemberMethod With {
+            .Name = "Initialize",
+            .Attributes = MemberAttributes.Public
+        }
+
         initMethod.CustomAttributes.Add(New CodeAttributeDeclaration("System.Diagnostics.DebuggerStepThrough"))
-        Dim stmt As String = "            FormInstance = New " & interopFormClass.FullName & "("
+        Dim stmt As StringBuilder = New StringBuilder("            FormInstance = New " & interopFormClass.FullName & "(")
         Dim addComma As Boolean = False
         For Each pOld As CodeParameter2 In method.Parameters
             ' check against list of supported types
             If Not IsSupported(pOld.Type) Then
                 DisplayWarning(String.Format(My.Resources.InitMethodErrMsg, pOld.Type.AsFullName, pOld.Name, pOld.Type.AsFullName))
-                Exit Sub
+                Return
             End If
-            Dim pNew As New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name)
-            pNew.Direction = GetParamDirection(pOld)
+
+            Dim pNew As New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name) With {
+                .Direction = GetParamDirection(pOld)
+            }
+
             initMethod.Parameters.Add(pNew)
             If addComma Then
-                stmt &= ", "
+                stmt.Append(", ")
             End If
-            stmt &= pOld.Name
+
+            stmt.Append(pOld.Name)
             addComma = True
         Next
-        stmt &= ")"
+
+        stmt.Append(")"c)
         initMethod.Statements.Add(New CodeSnippetStatement("            UnregisterFormInstance()"))
-        initMethod.Statements.Add(New CodeSnippetStatement(stmt))
+        initMethod.Statements.Add(New CodeSnippetStatement(stmt.ToString))
         initMethod.Statements.Add(New CodeSnippetStatement("            RegisterFormInstance()"))
         proxyClass.Members.Add(initMethod)
     End Sub
@@ -423,14 +437,13 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         MessageBox.Show(errorMessage, DISPLAY_CAPTION, MessageBoxButtons.OK, MessageBoxIcon.Warning)
     End Sub
 
-    Private Function AttributesMatch(ByVal ce As CodeElement, ByVal attrType As Type) As Boolean
+    Private Shared Function AttributesMatch(ByVal ce As CodeElement, ByVal attrType As Type) As Boolean
         Dim isMatch As Boolean = False
-        Dim ceName As String = ""
-        Dim staticName As String = ""
 
         'try matching name in CodeElement to actual type name
         'matching is case insensitive
         If ce IsNot Nothing Then
+            Dim ceName As String
             'try matching using partial name of the class, e.g. InteropFormAttribute Or InteropForm
             If (ce.Name IsNot Nothing) AndAlso (ce.Name <> "") Then
                 ceName = ce.Name
@@ -438,7 +451,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
             End If
 
             'next, try matching using full name of the class, e.g. Microsoft.InteropFormsToolkit.InteropFormAttribute Or *.InteropForm
-            If (isMatch = False) AndAlso (ce.FullName IsNot Nothing) AndAlso (ce.FullName <> "") Then
+            If Not isMatch AndAlso (ce.FullName IsNot Nothing) AndAlso (ce.FullName <> "") Then
                 ceName = ce.FullName
                 isMatch = (ceName.ToLower = attrType.FullName.ToLower) OrElse (ceName.ToLower = attrType.FullName.Replace("Attribute", "").ToLower)
             End If
@@ -448,62 +461,71 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
     End Function
 
     Private Sub AddMethod(ByVal proxyClass As CodeTypeDeclaration, ByVal interopFormClass As CodeClass, ByVal method As CodeFunction)
-        Dim proxyMethod As New CodeMemberMethod()
-        proxyMethod.Name = method.Name
-        proxyMethod.Attributes = MemberAttributes.Public
-        Dim trueEx As New CodePrimitiveExpression(True)
+        Dim proxyMethod As New CodeMemberMethod With {
+            .Name = method.Name,
+            .Attributes = MemberAttributes.Public
+        }
+
+        'Dim trueEx As New CodePrimitiveExpression(True)
         proxyMethod.CustomAttributes.Add(New CodeAttributeDeclaration("System.Diagnostics.DebuggerStepThrough"))
         proxyMethod.Statements.Add(GetCastFormInstanceStatement(interopFormClass))
-        Dim stmt As String
+        Dim stmt As StringBuilder = New StringBuilder
         If method.FunctionKind = vsCMFunction.vsCMFunctionFunction Then
             If Not IsSupported(method.Type) Then
                 DisplayWarning(String.Format(My.Resources.MethodErrMsg1, method.Type.AsFullName, method.Name))
-                Exit Sub
+                Return
             End If
 
             proxyMethod.ReturnType = New CodeTypeReference(method.Type.AsFullName)
-            stmt = "            Return "
+            stmt.Append("            Return ")
         Else
-            stmt = "            "
+            stmt.Append("            ")
         End If
-        stmt &= "castFormInstance." & method.Name & "("
+
+        stmt.Append("castFormInstance." & method.Name & "(")
         Dim addComma As Boolean = False
         For Each pOld As CodeParameter2 In method.Parameters
             ' check against list of supported types
             If Not IsSupported(pOld.Type) Then
                 DisplayWarning(String.Format(My.Resources.MethodErrMsg2, pOld.Type.AsFullName, method.Name))
-                Exit Sub
+                Return
             End If
-            Dim pNew As New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name)
-            pNew.Direction = GetParamDirection(pOld)
+
+            Dim pNew As New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name) With {
+                .Direction = GetParamDirection(pOld)
+            }
+
             proxyMethod.Parameters.Add(pNew)
             If addComma Then
-                stmt &= ", "
+                stmt.Append(", ")
             End If
-            stmt &= pOld.Name
+
+            stmt.Append(pOld.Name)
             addComma = True
         Next
-        stmt &= ")"
-        proxyMethod.Statements.Add(New CodeSnippetStatement(stmt))
+
+        stmt.Append(")"c)
+        proxyMethod.Statements.Add(New CodeSnippetStatement(stmt.ToString))
         proxyClass.Members.Add(proxyMethod)
     End Sub
 
     Private Sub AddProperty(ByVal proxyClass As CodeTypeDeclaration, ByVal interopFormClass As CodeClass, ByVal prop As CodeProperty2)
-        Dim proxyProp As New CodeMemberProperty
-        proxyProp.Name = prop.Name
-        proxyProp.Attributes = MemberAttributes.Public
-        proxyProp.Type = New CodeTypeReference(prop.Type.AsFullName)
+        Dim proxyProp As New CodeMemberProperty With {
+            .Name = prop.Name,
+            .Attributes = MemberAttributes.Public,
+            .Type = New CodeTypeReference(prop.Type.AsFullName)
+        }
 
         ' check against list of supported types
         If Not IsSupported(prop.Type) Then
             DisplayWarning(String.Format(My.Resources.PropertyErrMsg, prop.Type.AsFullName, proxyProp.Name))
-            Exit Sub
+            Return
         End If
 
         ' check for any parameters
         If prop.Parameters.Count > 0 Then
             DisplayWarning(String.Format(My.Resources.ParamPropertyErrMsg, proxyProp.Name))
-            Exit Sub
+            Return
         End If
 
         ' if there is a getter, create the getter for the proxy
@@ -523,7 +545,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         proxyClass.Members.Add(proxyProp)
     End Sub
 
-    Private Function GetCastFormInstanceStatement(ByVal interopFormClass As CodeClass) As CodeSnippetStatement
+    Private Shared Function GetCastFormInstanceStatement(ByVal interopFormClass As CodeClass) As CodeSnippetStatement
         Return New CodeSnippetStatement("            Dim castFormInstance As " & interopFormClass.FullName & " = FormInstance")
     End Function
 
@@ -536,7 +558,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
                 If ce.IsCodeType Then
                     Dim ct As CodeType = CType(ce, CodeType)
                     For Each ce2 As CodeElement In ct.Children
-                        If ce2.Kind = vsCMElement.vsCMElementDelegate And ce2.FullName = evt.Type.AsFullName Then
+                        If ce2.Kind = vsCMElement.vsCMElementDelegate AndAlso ce2.FullName = evt.Type.AsFullName Then
                             evtDelegate = CType(ce2, CodeDelegate2)
                         End If
                     Next
@@ -546,11 +568,11 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
 
         If evtDelegate Is Nothing Then
             DisplayWarning(String.Format(My.Resources.EventErrMsg, evt.Name, evt.Type.AsFullName))
-            Exit Sub
+            Return
         End If
 
         ' find or create the method that hooks the event from the Form
-        Dim hookCustomEventsMethod As CodeDom.CodeMemberMethod = Nothing
+        Dim hookCustomEventsMethod As CodeMemberMethod = Nothing
         For Each member As CodeTypeMember In proxyClass.Members
             If member.Name = "HookCustomEvents" Then
                 hookCustomEventsMethod = CType(member, CodeMemberMethod)
@@ -558,24 +580,28 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         Next
 
         If hookCustomEventsMethod Is Nothing Then
-            hookCustomEventsMethod = New CodeMemberMethod()
-            hookCustomEventsMethod.Name = "HookCustomEvents"
-            hookCustomEventsMethod.Attributes = MemberAttributes.Override Or MemberAttributes.Family
+            hookCustomEventsMethod = New CodeMemberMethod With {
+                .Name = "HookCustomEvents",
+                .Attributes = MemberAttributes.Override Or MemberAttributes.Family
+            }
+
             hookCustomEventsMethod.Statements.Add(GetCastFormInstanceStatement(interopFormClass))
             proxyClass.Members.Add(hookCustomEventsMethod)
         End If
 
         ' declare the event to be added to the class
-        Dim proxyEvent As New CodeDom.CodeMemberEvent()
-        proxyEvent.Attributes = MemberAttributes.Public
         ' Set event type to same type as original event
         ' However, if we find System.EventArgs in the signature this will change below
-        proxyEvent.Type = New CodeTypeReference(evt.Type.AsFullName)
-        proxyEvent.Name = evt.Name
+        Dim proxyEvent As New CodeMemberEvent With {
+            .Attributes = MemberAttributes.Public,
+            .Type = New CodeTypeReference(evt.Type.AsFullName),
+            .Name = evt.Name
+        }
 
         ' declare the handler method to be added to the sink interface
-        Dim sinkInterfaceMethod As New CodeDom.CodeMemberMethod()
-        sinkInterfaceMethod.Name = evt.Name
+        Dim sinkInterfaceMethod As New CodeMemberMethod With {
+            .Name = evt.Name
+        }
 
         ' declare a new delegate for the event for the case in which
         ' the event signature includes EventArgs or a derived class
@@ -587,8 +613,10 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         Dim isProxyDownCastDelegateAdded As Boolean = False
 
         ' create the method that handles the interopform's event
-        Dim proxyClassEventHandler As New CodeDom.CodeMemberMethod()
-        proxyClassEventHandler.Name = "castFormInstance_" & evt.Name
+        Dim proxyClassEventHandler As New CodeMemberMethod With {
+            .Name = "castFormInstance_" & evt.Name
+        }
+
         Dim reraiseEventExpression As New CodeDelegateInvokeExpression(New CodeEventReferenceExpression(New CodeThisReferenceExpression(), proxyEvent.Name))
 
         ' Map old parameters to new ones
@@ -606,10 +634,15 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
                     proxyClass.Members.Add(proxyDownCastDelegate)
                     proxyEvent.Type = New CodeTypeReference(proxyDownCastDelegate.Name)
                 End If
-                sinkInterfaceMethodParmNew = New CodeParameterDeclarationExpression("System.EventArgs", pOld.Name)
-                sinkInterfaceMethodParmNew.Direction = GetParamDirection(pOld)
-                proxyEventHandlerParmNew = New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name)
-                proxyEventHandlerParmNew.Direction = GetParamDirection(pOld)
+
+                sinkInterfaceMethodParmNew = New CodeParameterDeclarationExpression("System.EventArgs", pOld.Name) With {
+                    .Direction = GetParamDirection(pOld)
+                }
+
+                proxyEventHandlerParmNew = New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name) With {
+                    .Direction = GetParamDirection(pOld)
+                }
+
                 reraiseEventExpressionParmNew = New CodeArgumentReferenceExpression(sinkInterfaceMethodParmNew.Name)
 
                 ' add comment about the down-casting
@@ -618,12 +651,16 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
             ElseIf Not IsSupported(pOld.Type) Then
                 ' else check against list of supported types
                 DisplayWarning(String.Format(My.Resources.EventErrMsg2, pOld.Type.AsFullName, evt.Name))
-                Exit Sub
+                Return
             Else
-                sinkInterfaceMethodParmNew = New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name)
-                sinkInterfaceMethodParmNew.Direction = GetParamDirection(pOld)
-                proxyEventHandlerParmNew = New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name)
-                proxyEventHandlerParmNew.Direction = GetParamDirection(pOld)
+                sinkInterfaceMethodParmNew = New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name) With {
+                    .Direction = GetParamDirection(pOld)
+                }
+
+                proxyEventHandlerParmNew = New CodeParameterDeclarationExpression(pOld.Type.AsFullName, pOld.Name) With {
+                    .Direction = GetParamDirection(pOld)
+                }
+
                 reraiseEventExpressionParmNew = New CodeArgumentReferenceExpression(sinkInterfaceMethodParmNew.Name)
             End If
 
@@ -649,7 +686,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
     End Sub
 
     'To make sure we have marked the declarations appropriately with byref or byval
-    Private Function GetParamDirection(ByVal pOld As CodeParameter2) As FieldDirection
+    Private Shared Function GetParamDirection(ByVal pOld As CodeParameter2) As FieldDirection
         Select Case pOld.ParameterKind
             Case vsCMParameterKind.vsCMParameterKindRef
                 Return FieldDirection.Ref
@@ -664,16 +701,17 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
         If parmType.FullName.ToLower() = "system.eventargs" Then
             Return True
         End If
+
         For Each baseElement As CodeElement In parmType.Bases
             If baseElement.FullName.ToLower() = "system.eventargs" Then
                 Return True
             End If
-            If baseElement.IsCodeType Then
-                If IsEventArgs(CType(baseElement, CodeType)) Then
-                    Return True
-                End If
+
+            If baseElement.IsCodeType AndAlso IsEventArgs(CType(baseElement, CodeType)) Then
+                Return True
             End If
         Next
+
         Return False
     End Function
 
@@ -683,6 +721,7 @@ Public NotInheritable Class GenerateInteropFormProxyClasses
                 Return True
             End If
         Next
+
         ' wasn't in the list of supported types
         Return False
     End Function

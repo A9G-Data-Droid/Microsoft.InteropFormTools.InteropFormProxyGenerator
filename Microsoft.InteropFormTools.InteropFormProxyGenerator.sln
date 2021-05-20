@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 14
-VisualStudioVersion = 14.0.24720.0
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.31313.79
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "Microsoft.InteropFormTools.InteropFormProxyGenerator", "Microsoft.InteropFormTools.InteropFormProxyGenerator\Microsoft.InteropFormTools.InteropFormProxyGenerator.vbproj", "{5917F213-ECA0-43FE-81F0-444A48D4CC8F}"
 EndProject
@@ -18,5 +18,8 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B744C2B1-8D9F-430A-8D4B-D461FDB31245}
 	EndGlobalSection
 EndGlobal
